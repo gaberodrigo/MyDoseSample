@@ -49,11 +49,11 @@ interface GameWorld {
   remaining: number
   lives: number
   cell: number
-  status: 'playing' | 'caught' | 'won'
+  status: 'ready' | 'playing' | 'caught' | 'won'
   flash: number
 }
 
-type Status = 'playing' | 'caught' | 'won'
+type Status = 'ready' | 'playing' | 'caught' | 'won'
 
 function makeEntity(r: number, c: number): Entity {
   return { r, c, dir: null, nextDir: null, prog: 0, spawnR: r, spawnC: c }
@@ -73,7 +73,8 @@ function buildWorld(ghostCount: number): GameWorld {
     remaining: maze.tokenCount,
     lives: START_LIVES,
     cell: 24,
-    status: 'playing',
+    // Built frozen — the player begins the run with their first input.
+    status: 'ready',
     flash: 0,
   }
 }
@@ -92,6 +93,8 @@ const MAZE_INFO = parseMaze()
 export interface PacmanControls {
   setDirection: (dir: DirectionKey) => void
   restart: () => void
+  /** START button: begins the run if it hasn't started yet, otherwise restarts. */
+  start: () => void
 }
 
 interface PacmanGameProps {
@@ -128,7 +131,10 @@ export default function PacmanGame({
     audioRef.current = { playCollect, playDeath, playWin }
   }, [playCollect, playDeath, playWin])
 
-  const [status, setStatus] = useState<Status>('playing')
+  const [status, setStatus] = useState<Status>('ready')
+  // Status the next-built world should adopt: 'ready' on first mount (wait for
+  // the player), 'playing' after a restart (jump straight back in).
+  const initialStatusRef = useRef<Status>('ready')
   const [hud, setHud] = useState(() => ({
     remaining: MAZE_INFO.tokenCount,
     total: MAZE_INFO.tokenCount,
@@ -144,9 +150,25 @@ export default function PacmanGame({
     if (announceRef.current) announceRef.current.textContent = msg
   }, [])
 
+  // Lift the run out of its frozen 'ready' state. Ghosts only start chasing
+  // (and the player only moves) once this fires.
+  const beginGame = useCallback(() => {
+    const w = worldRef.current
+    if (!w || w.status !== 'ready') return
+    w.status = 'playing'
+    setStatus('playing')
+    announce('Game started. Collect every token.')
+  }, [announce])
+
   const setDirection = useCallback((dir: DirectionKey) => {
     const w = worldRef.current
-    if (!w || w.status !== 'playing') return
+    if (!w) return
+    // First input doubles as "begin" — start the run, then steer.
+    if (w.status === 'ready') {
+      w.status = 'playing'
+      setStatus('playing')
+    }
+    if (w.status !== 'playing') return
     w.player.nextDir = dir
     // Allow an immediate reversal even mid-tile for responsive feel.
     if (w.player.dir && OPPOSITE[w.player.dir] === dir) {
@@ -172,13 +194,21 @@ export default function PacmanGame({
     }
     const onKey = (e: KeyboardEvent) => {
       const dir = keyMap[e.key.toLowerCase()]
+      const w = worldRef.current
+      // While waiting to begin, any key starts the run; a direction key also steers.
+      if (w && w.status === 'ready' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        beginGame()
+        if (dir) setDirection(dir)
+        return
+      }
       if (!dir) return
       e.preventDefault()
       setDirection(dir)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [setDirection])
+  }, [setDirection, beginGame])
 
   // Track paused state in a ref (read by the rAF loop) and pause on tab hide.
   useEffect(() => {
@@ -194,6 +224,8 @@ export default function PacmanGame({
   useEffect(() => {
     wonRef.current = false
     const world = buildWorld(1)
+    world.status = initialStatusRef.current
+    setStatus(initialStatusRef.current)
     worldRef.current = world
 
     const canvas = canvasRef.current
@@ -452,6 +484,8 @@ export default function PacmanGame({
 
   const restart = useCallback(() => {
     wonRef.current = false
+    // A retry jumps straight back into play rather than re-prompting.
+    initialStatusRef.current = 'playing'
     setStatus('playing')
     setHud({
       remaining: MAZE_INFO.tokenCount,
@@ -461,10 +495,17 @@ export default function PacmanGame({
     setRestartKey((k) => k + 1)
   }, [])
 
+  // START button: begin the run if it's still waiting, otherwise restart.
+  const start = useCallback(() => {
+    const w = worldRef.current
+    if (w && w.status === 'ready') beginGame()
+    else restart()
+  }, [beginGame, restart])
+
   // Expose stable controls so the Game Boy chassis can drive the game.
   useEffect(() => {
-    onReady?.({ setDirection, restart })
-  }, [onReady, setDirection, restart])
+    onReady?.({ setDirection, restart, start })
+  }, [onReady, setDirection, restart, start])
 
   // Embedded: bare canvas + pixel HUD that fills the Game Boy LCD.
   // External controls (D-pad / START) are wired through `onReady`.
@@ -504,6 +545,23 @@ export default function PacmanGame({
           </span>
         </div>
 
+        {status === 'ready' && (
+          <button
+            type="button"
+            onClick={beginGame}
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center"
+            style={{ ...pixel, color: '#2f3a16', background: 'rgba(138,154,64,0.55)' }}
+          >
+            <span style={{ fontSize: '10px' }}>READY?</span>
+            <span
+              style={{ fontSize: '6px', letterSpacing: '0.08em' }}
+              className="animate-pulse"
+            >
+              PRESS ANY BUTTON
+            </span>
+          </button>
+        )}
+
         {status === 'caught' && (
           <div
             className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center"
@@ -525,7 +583,7 @@ export default function PacmanGame({
     <div className="flex flex-col items-center gap-3">
       <div
         ref={containerRef}
-        className="w-full flex justify-center"
+        className="relative w-full flex justify-center"
         aria-hidden={status === 'won'}
       >
         <canvas
@@ -534,6 +592,19 @@ export default function PacmanGame({
           aria-label="Token-run maze game. Use W A S D or arrow keys to move and collect every token."
           className="rounded-xl ring-1 ring-white/10 touch-none"
         />
+
+        {status === 'ready' && (
+          <button
+            type="button"
+            onClick={beginGame}
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-xl bg-background/70 backdrop-blur-sm text-center"
+          >
+            <span className="text-lg font-semibold tracking-tight">Ready?</span>
+            <span className="text-sm text-muted-foreground animate-pulse">
+              Press any button to begin
+            </span>
+          </button>
+        )}
       </div>
 
       {/* HUD */}

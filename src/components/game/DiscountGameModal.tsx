@@ -170,7 +170,7 @@ export function DiscountGameModal({
           {open && (
             <GameBoyShell
               onDirection={(dir) => controlsRef.current?.setDirection(dir)}
-              onStart={() => controlsRef.current?.restart()}
+              onStart={() => controlsRef.current?.start()}
             >
               <PacmanGame
                 onWin={handleWin}
