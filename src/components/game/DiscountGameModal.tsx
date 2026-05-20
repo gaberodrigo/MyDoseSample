@@ -61,39 +61,54 @@ export function DiscountGameModal({
   const [muted, setMuted] = useState(false)
   const lenis = useLenis()
   const prefersReducedMotion = useReducedMotion()
-  const restoreRef = useRef<{ overflow: string; paddingRight: string } | null>(null)
   const skipAutoOpenRef = useRef(false)
 
-  // Lock all background scrolling (Lenis runs its own RAF, so stop it explicitly).
+  // Background scroll-lock.
+  //
+  // We do NOT snapshot the previous inline `overflow` values: Base UI's Dialog
+  // applies its own scroll lock on <body>, and depending on effect ordering it
+  // can write `overflow: hidden` before we read it. Snapshotting that and
+  // "restoring" it on close would leave the page permanently scroll-locked —
+  // the original bug. Instead we always reset to empty strings so the inline
+  // style is removed and the document's stylesheet defaults take over.
   useEffect(() => {
-    if (open) {
-      lenis?.stop()
-      const body = document.body
-      const sbw = window.innerWidth - document.documentElement.clientWidth
-      restoreRef.current = {
-        overflow: body.style.overflow,
-        paddingRight: body.style.paddingRight,
-      }
-      body.style.overflow = 'hidden'
-      if (sbw > 0) body.style.paddingRight = `${sbw}px`
-    } else {
-      lenis?.start()
-      if (restoreRef.current) {
-        document.body.style.overflow = restoreRef.current.overflow
-        document.body.style.paddingRight = restoreRef.current.paddingRight
-        restoreRef.current = null
-      }
-    }
+    if (!open) return
+
+    const html = document.documentElement
+    const body = document.body
+    const scrollbarWidth = window.innerWidth - html.clientWidth
+
+    body.style.overflow = 'hidden'
+    html.style.overflow = 'hidden'
+    if (scrollbarWidth > 0) body.style.paddingRight = `${scrollbarWidth}px`
+
     return () => {
-      if (!open) return
-      lenis?.start()
-      if (restoreRef.current) {
-        document.body.style.overflow = restoreRef.current.overflow
-        document.body.style.paddingRight = restoreRef.current.paddingRight
-        restoreRef.current = null
-      }
+      body.style.overflow = ''
+      html.style.overflow = ''
+      body.style.paddingRight = ''
+    }
+  }, [open])
+
+  // Pause Lenis (which runs its own RAF) separately so a changing `lenis`
+  // reference doesn't tear down/reapply the scroll-lock above.
+  useEffect(() => {
+    if (!open || !lenis) return
+    lenis.stop()
+    return () => {
+      lenis.start()
     }
   }, [open, lenis])
+
+  // Belt-and-braces: on unmount, no matter what state the modal was in,
+  // make sure the page is left scrollable. Covers route changes, HMR,
+  // and any edge case where the effects above didn't run their cleanup.
+  useEffect(() => {
+    return () => {
+      document.body.style.overflow = ''
+      document.documentElement.style.overflow = ''
+      document.body.style.paddingRight = ''
+    }
+  }, [])
 
   const handleOpenChange = useCallback((next: boolean) => {
     if (!next) skipAutoOpenRef.current = true

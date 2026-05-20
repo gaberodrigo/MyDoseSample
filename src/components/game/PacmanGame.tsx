@@ -181,6 +181,14 @@ export default function PacmanGame({
   }, [])
 
   // Keyboard controls: WASD + arrow keys.
+  //
+  // This listener is only attached while PacmanGame is mounted, and PacmanGame
+  // is only rendered when the discount modal is open, so it is intrinsically
+  // gated to the modal's lifetime (and removed on unmount/close).
+  //
+  // We deliberately `preventDefault` ONLY for keys we actually consume
+  // (arrows / WASD, plus space/enter to start). That stops arrow keys from
+  // scrolling the page while playing, without hijacking Tab/Escape/typing.
   useEffect(() => {
     const keyMap: Record<string, DirectionKey> = {
       w: 'up',
@@ -192,11 +200,27 @@ export default function PacmanGame({
       arrowdown: 'down',
       arrowright: 'right',
     }
+    const startKeys = new Set([' ', 'enter'])
+
     const onKey = (e: KeyboardEvent) => {
-      const dir = keyMap[e.key.toLowerCase()]
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      // Don't interfere with typing in form fields rendered inside the modal.
+      const target = e.target as HTMLElement | null
+      if (
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable
+      ) {
+        return
+      }
+
+      const key = e.key.toLowerCase()
+      const dir = keyMap[key]
+      const isStart = startKeys.has(key)
+      if (!dir && !isStart) return
+
       const w = worldRef.current
-      // While waiting to begin, any key starts the run; a direction key also steers.
-      if (w && w.status === 'ready' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (w && w.status === 'ready') {
         e.preventDefault()
         beginGame()
         if (dir) setDirection(dir)
@@ -206,6 +230,7 @@ export default function PacmanGame({
       e.preventDefault()
       setDirection(dir)
     }
+
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [setDirection, beginGame])
